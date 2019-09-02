@@ -1,0 +1,130 @@
+# 10 opencv简单应用——相机标定
+
+## 10.1 标定原理
+​		标定的目的，一是消除相机成像和小孔成像之间的差别，二是消除透镜畸变队图像的影响。而在这其中，相对于小孔成像，相机成像会有两个参数矩阵，即内参数矩阵intrinsic parameters，和外参数矩阵extrinsic parameters。 
+​		其中，内参数矩阵M = [fx, 0, cx; 0, fy, cy; 0, 0, 1]里面，(fx, fy)是焦距，(cx, cy)是相机焦心。
+​		外参数矩阵为 [R | t] = [r11, r12, r13, t1; r21, r22, r23, t2; r31, r32, r33; t3]. 这是将由旋转向量 r = [rx, ry, rz]经过Rodrigues变换得到的R矩阵，和平移向量t = [t1, t2, t3] 组合而成。
+​		还有就是畸变参数矩阵distCoeffs，可以是4，5，8个元素组成，而且矩阵分别会返回的系数是：[k1, k2, p1, p2]；[k1, k2, p1, p2, k3]；[k1, k2, p1, p2, k3, k4, k5, k6]。
+
+## 10.2 标定板上的角点寻找
+#### 10.2.1 棋盘标定板
+##### 1. 找棋盘角点cv::findChessboardCorners()
+```c++
+// locate where the corners is,and show them in a image
+bool cv::findChessboardCorners(//return true if corners were found
+    cv::InputArray image, 		//8UC1or8UC3
+    cv::Size pattern_size, 		//corners per row, and per column, e.g. cvSize(cols,rows)
+    cv::OutputArray corners, 	
+    int flags=CV::CALIB_CB_ADAPTIVE_THRESH
+    		 |cv::CALIB_CB_NORMALIZE_IMARE
+);
+```
+其中，flags的参数（实现一个或多个附加滤波步骤）可以选择为：
+|flags|illustration|
+|:---|:---|
+|CV::CALIB_CB_ADAPTIVE_THRESH|默认方式，根据平均亮度进行阈值化|
+|cv::CALIB_CB_NORMALIZE_IMARE|阈值化操作前使用cv::equalizeHist()来归一化图像|
+|cv::CALIB_CB_FILTER_QUADS|会阈值化后从棋盘上黑色方块的透视图中找出四边形|
+|cv::CALIB_CV_FAST_CHECK||
+注：使用时，pattern_size要跟objectPoints的行列数一致。
+
+##### 2. 角点检测cv::goodFeaturesToTrack()
+
+https://blog.csdn.net/guduruyu/article/details/69537083
+```c++
+void cv::goodFeaturesToTrack(
+	cv::InputArray image, // 输入图像（CV_8UC1 CV_32FC1）
+	cv::OutputArray corners, // 输出角点vector
+	int maxCorners, 	// 最大角点数目
+	double qualityLevel, // 质量水平系数（小于1.0的正数，一般在0.01-0.1之间）
+	double minDistance, // 最小距离，小于此距离的点忽略
+	cv::InputArray mask = noArray(), // mask=0的点忽略
+	int blockSize = 3, // 使用的邻域数
+	bool useHarrisDetector = false, // false ='Shi Tomasi metric'
+	double k = 0.04 // Harris角点检测时使用
+);
+```
+##### 3. 找棋盘上的亚像素角点cv::cornerSubPix()
+```c++
+void cv::cornerSubPix (		//提高精度
+	cv::InputArray image,	//要求同上
+	cv::InputOutputArray corners,	//输入角点位置，也储存输出角点位置
+	cv::Size winSize,		//计算亚像素角点时考虑的区域的大小，大小为N**N; N=(winSize*2+1)。
+	cv::Size zeroZone,		//类似于winSize，但是总具有较小的范围，Size(-1,-1)表示忽略
+	cv::TermCriteria criteria //停止迭代计算的标准。
+);
+```
+​		注：参数criteria，需要用TermCriteria的构造函数来确定：
+`TermCriteria(int type, int maxcount, double epsilon);`
+​		其中，maxcount为最大迭代次数，epsilon为迭代停止时所需的精度或参数变化量，type可选的值有三个，分别是：
+
+|     值（枚举类型）     |                    意义                    |
+| :--------------------: | :----------------------------------------: |
+| TermCriteria::MAX_ITER |        迭代次数达到了最大次数时停止        |
+|  TermCriteria::COUNT   |                    同上                    |
+|   TermCriteria::EPS    | 角点位置变化的最小值已经达到最小时停止迭代 |
+
+#### 10.2.2 角点寻找原理
+​		角点寻找，即标定特征点的寻找。
+
+#### 10.2.3 圆形标定板
+
+##### 1. 找角点函数
+
+```c++
+bool cv::findCirclesGrid(
+	cv::InputArray  image,
+	cv::Size		patternSize,
+	cv::OutputArray centers,
+	int				flags = cv::CALIB_CB_SYMMETRIC_GRID
+	const cv::Ptr<cv::FeatureDetector>& blobDetector
+						  = new SimpleBolbDetector()
+)
+```
+
+对称网格(跟棋盘角点一样对齐地排列成行和列):`flags = cv::CALIB_CB_SYMMETRIC_GRID`
+
+非对称网格(每一行中的圆形交错排列):`flags = cv::CALIB_CB_ASYMMETRIC_GRID`
+
+## 10.3. 相机标定函数
+​		opencv提供了c、c++、python等语言的相机标定函数。
+#### 10.3.1 c++标定函数cv::calibrateCamera()
+##### 1. 函数声明(其实，还有一个重载函数)
+```c++
+double cv::calibrateCamera(
+	cv::InputArrayOfArrays objectPoints, //K vecs(N pts each)
+	cv::InputArrayOfArrays imagePoints,  //K vecs(N pts each)
+	cv::Size			   imageSize,	 //size of input image
+	cv::InputOutputArray   cameraMatrix, //3*3 matrix
+	cv::InputOutputArray   distCoeffs,   //4,5or8 vecs
+    cv::OutputArrayOfArrays rvecs,		 //K vecs
+	cv::OutputArrayOfArrays tvecs,		 //K vecs
+    int						flags = 0,	 //control option
+    cv::TermCriteria		criteria = cv::TermCriteria()
+)
+```
+##### 2. 各参数意义
+**`objectPoints`**：向量的向量。是世界坐标系中的点，也就是标定板上的点的实际位置。一般取为：`vector<vector<Point3f>>`。
+**`imagePoints`**：向量的向量。是图像坐标系中的点，也就是拍摄的图像上的位置。一般取为：`vector<vector<Point2f>>`。如果用findChessboardCorner()得到，则第一个角点位置为原点。
+**`imageSize`**：Size类型。告诉函数提取imagePoints中的点的图像有多大。常常取为：`Size(cols, rows)`， 或者`cvGetSize(image)`。
+注：`CvSize cvGetSize(const CvArr* arr)`，返回矩阵arr的大小。
+**`cameraMatrix`**：相机内参矩阵。是一个3*3的矩阵，可输入一个Mat矩阵。
+**`distCoeffs`**：是畸变参数矩阵，也可以输入一个Mat类型的矩阵。
+**`rvecs`**：旋转向量，应该输入：`vector<Mat> recs`。因为，每一个objectPoints都会的得到一个rvecs。
+**`trecs`**：平移向量，一切同上。
+**`criteria`**：迭代算法的中止准则。
+**`flags`**：标定函数选取的模型，这是函数的重点内容，常用的模型有以下几种：
+		(1)`CV_CALIB_USE_INTRISIC_GUESS`：使用该参数时，将包含有效的fx, fy, cx, cy的估计值的内参矩阵作为初始值输入，然后函数对其优化；不使用该参数时，则将图像的中心点初始化为光轴中心(cx, cy)，并使用最小二乘法估算fx, fy。
+​		如果已知内部参数（内参数矩阵和畸变参数），就不需要这个函数估计外参数，可以使用`solvePnP()`。
+​		(2)`CV_CALIB_FIX_PRICIPLE_POINT`：如果单独使用，则光轴中心固定在图像中心。如果和`CV_CALIB_USE_INTRISIC_GUESS`一起使用，则光轴中心固定在上一参数提取出的初始值上。
+​		(3)`CV_CALIB_FIX_ASPECT_RATIO`：如果使用，则固定fx/fy的比值，只将fy当作可变量进行优化计算。否则，fx和fy的实际值被忽略，只有它们的比值被计算。
+​		(4)`CV_CALIB_FIX_FOCAL_LENGTH`：优化时直接使用内参数矩阵中传递的fx和fy。
+​		(5)`CV_CALIB_ZERO_TANGENT_DIST`：切向畸变系数p1和p2被设置并保持为0。
+​		(6)`CV_CALIB_FIX_K1`, …, `CV_CALIB_FIX_K6`：对应的径向畸变系数在优化中保持不变。如果设置了`CV_CALIB_USE_INTRISIC_GUESS`，则从提供的畸变参数矩阵中得到，否则设置为0.
+​		(7)`CV_CALIB_RATIONAL_MODEL`：启动畸变参数k4, k5, k6三个畸变参数，使标定函数使用理想模型，返回8个参数。如果没有设置，则只计算其他5个畸变参数。
+​		(8)`CALIB_THIN_PRISM_MODEL`：使用薄棱镜畸变模型，启动畸变参数s1、s2、s3、 s4，返回12个系数。否则，只返回5个系数。
+​		(9)`CALIB_FIX_S1_S2_S3_S4`：优化过程中不改变s1、s2、s3、s4.
+​		(10)`CALIB_TITLED_MODEL`：使用倾斜模型，启动畸变参数τx、τy，返回14个参数。
+​		(11)函数返回值——重投影的总的均方根误差。
+
+
